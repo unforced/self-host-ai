@@ -1,0 +1,141 @@
+# docker-compose.yml
+services:
+  # -------------------------------------------
+  # LLM Host: AnythingLLM
+  # -------------------------------------------
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest # Use the official image
+    container_name: anythingllm
+    depends_on:
+      - graphiti # Make sure Graphiti starts first
+    ports:
+      - "3001:3001" # Default AnythingLLM port
+    volumes:
+      - ./anythingllm-storage:/app/server/storage # Persist AnythingLLM data (configs, vector cache, etc.)
+      # - ./anythingllm-collector:/app/collector/storage # Persist collector data if used - Commented out to troubleshoot startup error
+    environment:
+      # --- Core Settings ---
+      # Enables authentication. Set to true for production/shared use.
+      # If true, use ANYTHINGLLM_INITIAL_ADMIN_KEY on first run.
+      AUTH_MODE: "false" # Set to "true" for production/auth
+      ANYTHINGLLM_INITIAL_ADMIN_KEY: ${ANYTHINGLLM_INITIAL_ADMIN_KEY:-} # Seed key if AUTH_MODE=true
+
+      # --- Memory Configuration (Using Graphiti via MCP) ---
+      # Tells AnythingLLM to use the Memory Connector Plugin
+      MEMORY_BACKEND: "memory_connector_plugin"
+      # URL of the Graphiti MCP endpoint inside the Docker network
+      MCP_API_URL: "http://graphiti:8080/api/v1/memory"
+      # API Key needed to talk to Graphiti (must match Graphiti's key)
+      MCP_API_KEY: "${GRAPHITI_API_KEY}"
+      # Optional: Define a default namespace within Graphiti for AnythingLLM's memories
+      # MCP_NAMESPACE: "anythingllm_default"
+    restart: unless-stopped
+    networks:
+      - ai_network
+
+  # -------------------------------------------
+  # Shared Memory Store: Graphiti
+  # -------------------------------------------
+  graphiti:
+    image: zepai/graphiti:latest # Official Graphiti image
+    container_name: graphiti
+    depends_on:
+      - qdrant # Make sure the vector DB starts first
+      - neo4j  # Make sure the graph DB starts first
+    ports:
+      - "8080:8080" # Graphiti API port
+    environment:
+      # --- Core Settings ---
+      GRAPHITI_API_KEY: "${GRAPHITI_API_KEY?GRAPHITI_API_KEY must be set in .env}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY?OPENAI_API_KEY must be set in .env}"
+
+      # --- Vector Store Connection (Qdrant) ---
+      # Specify which vector store backend to use
+      VECTOR_STORE: "qdrant"
+      # Qdrant connection details (using service name within Docker network)
+      QDRANT_HOST: "qdrant"
+      QDRANT_PORT: "6333"
+      # QDRANT_API_KEY: ${QDRANT_API_KEY:-} # Uncomment if Qdrant needs an API key
+
+      # --- Graph Database Connection (Neo4j) ---
+      # Even when Qdrant is the primary vector store, Graphiti uses Neo4j for graph memory.
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USER: "neo4j"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD?NEO4J_PASSWORD must be set in .env}"
+
+      # --- Graphiti Internal Storage (Optional: Use Postgres instead of SQLite) ---
+      # DB_TYPE: "postgres"
+      # DB_HOST: "postgres_db"
+      # DB_PORT: "5432"
+      # DB_USER: "${POSTGRES_USER}"
+      # DB_PASSWORD: "${POSTGRES_PASSWORD}"
+      # DB_NAME: "${POSTGRES_DB}"
+    volumes:
+      - graphiti-data:/app/data # Persist Graphiti's internal data (SQLite DB, metadata)
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8080"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ai_network
+
+  # -------------------------------------------
+  # Vector Database: Qdrant
+  # -------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333" # Qdrant HTTP API
+      - "6334:6334" # Qdrant gRPC API
+    volumes:
+      - qdrant-storage:/qdrant/storage # Persist Qdrant data (collections, vectors)
+    # environment: # Uncomment if you need API key or specific Qdrant configs
+    #   QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+    restart: unless-stopped
+    networks:
+      - ai_network
+
+  # -------------------------------------------
+  # Graph Database: Neo4j
+  # -------------------------------------------
+  neo4j:
+    image: neo4j:5.18 # Pinned to a version known to be more stable on ARM64
+    container_name: neo4j
+    ports:
+      - "7474:7474" # Neo4j Browser
+      - "7687:7687" # Bolt protocol
+    volumes:
+      - neo4j-data:/data
+    environment:
+      # Sets the initial password for the 'neo4j' user.
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD?NEO4J_PASSWORD must be set in .env}
+      # Optional: Plugins or other settings
+      # NEO4J_PLUGINS: '[\"apoc\"]'
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7687"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ai_network
+
+# -------------------------------------------
+# Volumes (for data persistence)
+# -------------------------------------------
+volumes:
+  anythingllm-storage:
+  anythingllm-collector:
+  graphiti-data:
+  qdrant-storage:
+  neo4j-data: # Added volume for Neo4j persistence
+
+# -------------------------------------------
+# Network (allows containers to talk via service names)
+# -------------------------------------------
+networks:
+  ai_network:
+    driver: bridge
