@@ -43,7 +43,7 @@ services:
       - qdrant # Make sure the vector DB starts first
       - neo4j  # Make sure the graph DB starts first
     ports:
-      - "8080:8080" # Graphiti API port
+      - "8080:8000" # Map host 8080 to container 8000 (where Graphiti listens)
     environment:
       # --- Core Settings ---
       GRAPHITI_API_KEY: "${GRAPHITI_API_KEY?GRAPHITI_API_KEY must be set in .env}"
@@ -72,11 +72,6 @@ services:
       # DB_NAME: "${POSTGRES_DB}"
     volumes:
       - graphiti-data:/app/data # Persist Graphiti's internal data (SQLite DB, metadata)
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "8080"]
-      interval: 5s
-      timeout: 10s
-      retries: 5
     restart: unless-stopped
     networks:
       - ai_network
@@ -114,11 +109,6 @@ services:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD?NEO4J_PASSWORD must be set in .env}
       # Optional: Plugins or other settings
       # NEO4J_PLUGINS: '[\"apoc\"]'
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "7687"]
-      interval: 5s
-      timeout: 10s
-      retries: 5
     restart: unless-stopped
     networks:
       - ai_network
